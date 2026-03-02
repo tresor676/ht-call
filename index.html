@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tresor Call</title>
+<link rel="manifest" href="manifest.json">
+
+<style>
+body{
+  margin:0;
+  font-family:system-ui;
+  background:#0b141a;
+  color:white;
+}
+.header{
+  background:#075E54;
+  padding:15px;
+  text-align:center;
+  font-weight:bold;
+}
+.card{
+  margin:20px;
+  padding:20px;
+  background:#1f2c34;
+  border-radius:12px;
+}
+input{
+  width:100%;
+  padding:12px;
+  margin:8px 0;
+  border-radius:8px;
+  border:none;
+}
+button{
+  width:100%;
+  padding:12px;
+  border:none;
+  border-radius:25px;
+  background:#25D366;
+  color:black;
+  font-weight:bold;
+  margin-top:10px;
+}
+.user{
+  padding:15px;
+  border-bottom:1px solid #2a3942;
+}
+.user:active{background:#2a3942;}
+video{
+  width:100%;
+  height:100vh;
+  object-fit:cover;
+}
+</style>
+</head>
+<body>
+
+<div class="header">Tresor Call</div>
+
+<div id="login" class="card">
+<h3>Connexion</h3>
+<input id="email" placeholder="Email">
+<input id="password" type="password" placeholder="Password">
+<button onclick="register()">Créer compte</button>
+<button onclick="login()">Se connecter</button>
+</div>
+
+<div id="users" style="display:none">
+<div class="card">
+<h3>Utilisateurs</h3>
+<div id="userList"></div>
+</div>
+</div>
+
+<div id="callScreen" style="display:none">
+<video id="localVideo" autoplay muted playsinline></video>
+<video id="remoteVideo" autoplay playsinline></video>
+<button onclick="endCall()">Raccrocher</button>
+</div>
+
+<script type="module">
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import {
+  getAuth,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+import {
+  getFirestore,
+  doc,
+  setDoc,
+  getDoc,
+  updateDoc,
+  collection,
+  addDoc,
+  onSnapshot
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCNtKgSRE_qDKwIkq4VPqPOuRgs2iKXfoQ",
+  authDomain: "tresor-ae58e.firebaseapp.com",
+  projectId: "tresor-ae58e",
+  storageBucket: "tresor-ae58e.firebasestorage.app",
+  messagingSenderId: "835562519447",
+  appId: "1:835562519447:web:841895f8a84fc6dbc522d2"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+let pc;
+let localStream;
+let currentCallId;
+
+const servers = {
+  iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }]
+};
+
+// AUTH
+
+window.register = async () => {
+  const email = document.getElementById("email").value;
+  const password = document.getElementById("password").value;
+
+  const cred = await createUserWithEmailAndPassword(auth,email,password);
+
+  await setDoc(doc(db,"users",cred.user.uid),{
+    email,
+    online:true
+  });
+};
+
+window.login = async () => {
+  await signInWithEmailAndPassword(
+    auth,
+    document.getElementById("email").value,
+    document.getElementById("password").value
+  );
+};
+
+onAuthStateChanged(auth,user=>{
+  if(user){
+    document.getElementById("login").style.display="none";
+    document.getElementById("users").style.display="block";
+    loadUsers();
+    listenIncoming();
+  }
+});
+
+// LOAD USERS
+
+function loadUsers(){
+  onSnapshot(collection(db,"users"), snap=>{
+    userList.innerHTML="";
+    snap.forEach(d=>{
+      if(d.id !== auth.currentUser.uid){
+        userList.innerHTML += `
+        <div class="user" onclick="callUser('${d.id}')">
+          ${d.data().email}
+        </div>`;
+      }
+    });
+  });
+}
+
+// CALL USER
+
+window.callUser = async (receiverId) => {
+
+  pc = new RTCPeerConnection(servers);
+
+  localStream = await navigator.mediaDevices.getUserMedia({
+    audio:true,
+    video:{ width:320, height:240 }
+  });
+
+  localVideo.srcObject = localStream;
+  localStream.getTracks().forEach(track=>{
+    pc.addTrack(track,localStream);
+  });
+
+  pc.ontrack = e=>{
+    remoteVideo.srcObject = e.streams[0];
+  };
+
+  const callDoc = doc(collection(db,"calls"));
+  currentCallId = callDoc.id;
+
+  pc.onicecandidate = e=>{
+    if(e.candidate){
+      addDoc(collection(callDoc,"offerCandidates"),e.candidate.toJSON());
+    }
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  await setDoc(callDoc,{
+    caller: auth.currentUser.uid,
+    receiver: receiverId,
+    offer,
+    status:"ringing"
+  });
+
+  onSnapshot(callDoc, snapshot=>{
+    const data = snapshot.data();
+    if(data?.answer && !pc.currentRemoteDescription){
+      pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+      document.getElementById("callScreen").style.display="block";
+    }
+  });
+
+  onSnapshot(collection(callDoc,"answerCandidates"), snap=>{
+    snap.docChanges().forEach(change=>{
+      if(change.type==="added"){
+        pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+      }
+    });
+  });
+};
+
+// INCOMING CALL
+
+function listenIncoming(){
+  onSnapshot(collection(db,"calls"), snap=>{
+    snap.forEach(async d=>{
+      const data = d.data();
+      if(data.receiver===auth.currentUser.uid && data.status==="ringing"){
+        if(confirm("📞 Appel entrant")){
+          answerCall(d.id,data);
+        }
+      }
+    });
+  });
+}
+
+async function answerCall(callId,data){
+
+  pc = new RTCPeerConnection(servers);
+  currentCallId = callId;
+
+  localStream = await navigator.mediaDevices.getUserMedia({
+    audio:true,
+    video:{ width:320, height:240 }
+  });
+
+  localVideo.srcObject = localStream;
+  localStream.getTracks().forEach(track=>{
+    pc.addTrack(track,localStream);
+  });
+
+  pc.ontrack = e=>{
+    remoteVideo.srcObject = e.streams[0];
+  };
+
+  pc.onicecandidate = e=>{
+    if(e.candidate){
+      addDoc(collection(db,"calls",callId,"answerCandidates"),e.candidate.toJSON());
+    }
+  };
+
+  await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+
+  await updateDoc(doc(db,"calls",callId),{
+    answer,
+    status:"accepted"
+  });
+
+  onSnapshot(collection(db,"calls",callId,"offerCandidates"), snap=>{
+    snap.docChanges().forEach(change=>{
+      if(change.type==="added"){
+        pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+      }
+    });
+  });
+
+  document.getElementById("callScreen").style.display="block";
+}
+
+// END CALL
+
+window.endCall = async ()=>{
+  if(pc) pc.close();
+  if(currentCallId){
+    await updateDoc(doc(db,"calls",currentCallId),{
+      status:"ended"
+    });
+  }
+  document.getElementById("callScreen").style.display="none";
+};
+
+</script>
+
+</body>
+</html>
