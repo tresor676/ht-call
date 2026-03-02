@@ -172,6 +172,9 @@ function loadUsers(){
 
 window.callUser = async (receiverId) => {
 
+  // Affiche immédiatement l'écran d'appel sortant
+  document.getElementById("callScreen").style.display = "block";
+
   pc = new RTCPeerConnection(servers);
 
   localStream = await navigator.mediaDevices.getUserMedia({
@@ -207,11 +210,11 @@ window.callUser = async (receiverId) => {
     status:"ringing"
   });
 
+  // Ici, on garde le code WebRTC normal
   onSnapshot(callDoc, snapshot=>{
     const data = snapshot.data();
     if(data?.answer && !pc.currentRemoteDescription){
       pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-      document.getElementById("callScreen").style.display="block";
     }
   });
 
