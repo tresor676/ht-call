@@ -1,56 +1,26 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tresor Call</title>
-<link rel="manifest" href="manifest.json">
 
 <style>
-body{
-  margin:0;
-  font-family:system-ui;
-  background:#0b141a;
-  color:white;
-}
-.header{
-  background:#075E54;
-  padding:15px;
-  text-align:center;
-  font-weight:bold;
-}
-.card{
-  margin:20px;
-  padding:20px;
-  background:#1f2c34;
-  border-radius:12px;
-}
-input{
-  width:100%;
-  padding:12px;
-  margin:8px 0;
-  border-radius:8px;
-  border:none;
-}
-button{
-  width:100%;
-  padding:12px;
-  border:none;
-  border-radius:25px;
-  background:#25D366;
-  color:black;
-  font-weight:bold;
-  margin-top:10px;
-}
-.user{
-  padding:15px;
-  border-bottom:1px solid #2a3942;
-}
-.user:active{background:#2a3942;}
-video{
-  width:100%;
-  height:100vh;
-  object-fit:cover;
+body{margin:0;font-family:system-ui;background:#111;color:white}
+.header{background:#075E54;padding:15px;text-align:center;font-weight:bold}
+.screen{display:none}
+.card{padding:20px}
+input{width:100%;padding:12px;margin:8px 0;border-radius:8px;border:none}
+button{padding:12px;border:none;border-radius:25px;font-weight:bold}
+.green{background:#25D366;color:black;width:100%}
+.red{background:#e53935;color:white;width:100%}
+.user{padding:15px;border-bottom:1px solid #222}
+.user:active{background:#222}
+video{width:100%;height:100vh;object-fit:cover}
+.overlay{
+ position:absolute;
+ bottom:40px;
+ width:100%;
+ text-align:center;
 }
 </style>
 </head>
@@ -58,47 +28,49 @@ video{
 
 <div class="header">Tresor Call</div>
 
-<div id="login" class="card">
+<!-- LOGIN -->
+<div id="loginScreen" class="screen card" style="display:block">
 <h3>Connexion</h3>
 <input id="email" placeholder="Email">
 <input id="password" type="password" placeholder="Password">
-<button onclick="register()">Créer compte</button>
-<button onclick="login()">Se connecter</button>
+<button class="green" onclick="register()">Créer compte</button>
+<button class="green" onclick="login()">Se connecter</button>
 </div>
 
-<div id="users" style="display:none">
-<div class="card">
-<h3>Utilisateurs</h3>
+<!-- USERS -->
+<div id="usersScreen" class="screen">
 <div id="userList"></div>
 </div>
+
+<!-- OUTGOING -->
+<div id="callingScreen" class="screen" style="text-align:center;padding-top:100px">
+<h2 id="callingText">Calling...</h2>
+<button class="red" onclick="endCall()">Annuler</button>
 </div>
 
-<div id="callScreen" style="display:none">
-<video id="localVideo" autoplay muted playsinline></video>
+<!-- INCOMING -->
+<div id="incomingScreen" class="screen" style="text-align:center;padding-top:100px">
+<h2>📞 Appel entrant</h2>
+<button class="green" onclick="acceptCall()">Accepter</button>
+<button class="red" onclick="declineCall()">Refuser</button>
+</div>
+
+<!-- VIDEO -->
+<div id="videoScreen" class="screen">
 <video id="remoteVideo" autoplay playsinline></video>
-<button onclick="endCall()">Raccrocher</button>
+<video id="localVideo" autoplay muted playsinline style="position:absolute;width:120px;height:160px;bottom:20px;right:20px;border-radius:12px"></video>
+<div class="overlay">
+<button class="red" onclick="endCall()">Raccrocher</button>
+</div>
 </div>
 
 <script type="module">
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import {
-  getAuth,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  onAuthStateChanged
-} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-
-import {
-  getFirestore,
-  doc,
-  setDoc,
-  getDoc,
-  updateDoc,
-  collection,
-  addDoc,
-  onSnapshot
-} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged }
+from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import { getFirestore, doc, setDoc, updateDoc, getDoc, collection, addDoc, onSnapshot }
+from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCNtKgSRE_qDKwIkq4VPqPOuRgs2iKXfoQ",
@@ -117,190 +89,136 @@ let pc;
 let localStream;
 let currentCallId;
 
-const servers = {
-  iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }]
+const servers = { iceServers:[{urls:["stun:stun.l.google.com:19302"]}] };
+
+function show(screen){
+ document.querySelectorAll(".screen").forEach(s=>s.style.display="none");
+ document.getElementById(screen).style.display="block";
+}
+
+window.register = async ()=>{
+ await createUserWithEmailAndPassword(auth,email.value,password.value);
 };
 
-// AUTH
-
-window.register = async () => {
-  const email = document.getElementById("email").value;
-  const password = document.getElementById("password").value;
-
-  const cred = await createUserWithEmailAndPassword(auth,email,password);
-
-  await setDoc(doc(db,"users",cred.user.uid),{
-    email,
-    online:true
-  });
-};
-
-window.login = async () => {
-  await signInWithEmailAndPassword(
-    auth,
-    document.getElementById("email").value,
-    document.getElementById("password").value
-  );
+window.login = async ()=>{
+ await signInWithEmailAndPassword(auth,email.value,password.value);
 };
 
 onAuthStateChanged(auth,user=>{
-  if(user){
-    document.getElementById("login").style.display="none";
-    document.getElementById("users").style.display="block";
-    loadUsers();
-    listenIncoming();
-  }
+ if(user){
+  show("usersScreen");
+  loadUsers();
+  listenIncoming();
+ }
 });
 
-// LOAD USERS
-
 function loadUsers(){
-  onSnapshot(collection(db,"users"), snap=>{
-    userList.innerHTML="";
-    snap.forEach(d=>{
-      if(d.id !== auth.currentUser.uid){
-        userList.innerHTML += `
-        <div class="user" onclick="callUser('${d.id}')">
-          ${d.data().email}
-        </div>`;
-      }
-    });
+ onSnapshot(collection(db,"users"),snap=>{
+  userList.innerHTML="";
+  snap.forEach(d=>{
+   if(d.id!==auth.currentUser.uid){
+    userList.innerHTML+=`
+    <div class="user" onclick="startCall('${d.id}')">
+      ${d.data().email}
+    </div>`;
+   }
   });
+ });
 }
 
-// CALL USER
+window.startCall = async(receiverId)=>{
+ show("callingScreen");
+ pc = new RTCPeerConnection(servers);
 
-window.callUser = async (receiverId) => {
+ localStream = await navigator.mediaDevices.getUserMedia({
+  video:{width:320,height:240},
+  audio:true
+ });
 
-  // Affiche immédiatement l'écran d'appel sortant
-  document.getElementById("callScreen").style.display = "block";
+ localVideo.srcObject = localStream;
+ localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
 
-  pc = new RTCPeerConnection(servers);
+ pc.ontrack=e=>remoteVideo.srcObject=e.streams[0];
 
-  localStream = await navigator.mediaDevices.getUserMedia({
-    audio:true,
-    video:{ width:320, height:240 }
-  });
+ const callDoc = doc(collection(db,"calls"));
+ currentCallId = callDoc.id;
 
-  localVideo.srcObject = localStream;
-  localStream.getTracks().forEach(track=>{
-    pc.addTrack(track,localStream);
-  });
+ pc.onicecandidate=e=>{
+  if(e.candidate) addDoc(collection(callDoc,"offerCandidates"),e.candidate.toJSON());
+ };
 
-  pc.ontrack = e=>{
-    remoteVideo.srcObject = e.streams[0];
-  };
+ const offer = await pc.createOffer();
+ await pc.setLocalDescription(offer);
 
-  const callDoc = doc(collection(db,"calls"));
-  currentCallId = callDoc.id;
+ await setDoc(callDoc,{
+  caller:auth.currentUser.uid,
+  receiver:receiverId,
+  offer,
+  status:"ringing"
+ });
 
-  pc.onicecandidate = e=>{
-    if(e.candidate){
-      addDoc(collection(callDoc,"offerCandidates"),e.candidate.toJSON());
-    }
-  };
-
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-
-  await setDoc(callDoc,{
-    caller: auth.currentUser.uid,
-    receiver: receiverId,
-    offer,
-    status:"ringing"
-  });
-
-  // Ici, on garde le code WebRTC normal
-  onSnapshot(callDoc, snapshot=>{
-    const data = snapshot.data();
-    if(data?.answer && !pc.currentRemoteDescription){
-      pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-    }
-  });
-
-  onSnapshot(collection(callDoc,"answerCandidates"), snap=>{
-    snap.docChanges().forEach(change=>{
-      if(change.type==="added"){
-        pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
-      }
-    });
-  });
+ onSnapshot(callDoc,s=>{
+  const data=s.data();
+  if(data?.answer && !pc.currentRemoteDescription){
+   pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+   show("videoScreen");
+  }
+ });
 };
 
-// INCOMING CALL
-
 function listenIncoming(){
-  onSnapshot(collection(db,"calls"), snap=>{
-    snap.forEach(async d=>{
-      const data = d.data();
-      if(data.receiver===auth.currentUser.uid && data.status==="ringing"){
-        if(confirm("📞 Appel entrant")){
-          answerCall(d.id,data);
-        }
-      }
-    });
+ onSnapshot(collection(db,"calls"),snap=>{
+  snap.forEach(d=>{
+   const data=d.data();
+   if(data.receiver===auth.currentUser.uid && data.status==="ringing"){
+    currentCallId=d.id;
+    show("incomingScreen");
+   }
   });
+ });
 }
 
-async function answerCall(callId,data){
+window.acceptCall = async()=>{
+ const callDoc=doc(db,"calls",currentCallId);
+ const data=(await getDoc(callDoc)).data();
 
-  pc = new RTCPeerConnection(servers);
-  currentCallId = callId;
+ pc=new RTCPeerConnection(servers);
 
-  localStream = await navigator.mediaDevices.getUserMedia({
-    audio:true,
-    video:{ width:320, height:240 }
-  });
+ localStream=await navigator.mediaDevices.getUserMedia({
+  video:{width:320,height:240},
+  audio:true
+ });
 
-  localVideo.srcObject = localStream;
-  localStream.getTracks().forEach(track=>{
-    pc.addTrack(track,localStream);
-  });
+ localVideo.srcObject=localStream;
+ localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
 
-  pc.ontrack = e=>{
-    remoteVideo.srcObject = e.streams[0];
-  };
+ pc.ontrack=e=>remoteVideo.srcObject=e.streams[0];
 
-  pc.onicecandidate = e=>{
-    if(e.candidate){
-      addDoc(collection(db,"calls",callId,"answerCandidates"),e.candidate.toJSON());
-    }
-  };
+ pc.onicecandidate=e=>{
+  if(e.candidate) addDoc(collection(callDoc,"answerCandidates"),e.candidate.toJSON());
+ };
 
-  await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+ await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+ const answer=await pc.createAnswer();
+ await pc.setLocalDescription(answer);
 
-  const answer = await pc.createAnswer();
-  await pc.setLocalDescription(answer);
+ await updateDoc(callDoc,{answer,status:"accepted"});
 
-  await updateDoc(doc(db,"calls",callId),{
-    answer,
-    status:"accepted"
-  });
+ show("videoScreen");
+};
 
-  onSnapshot(collection(db,"calls",callId,"offerCandidates"), snap=>{
-    snap.docChanges().forEach(change=>{
-      if(change.type==="added"){
-        pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
-      }
-    });
-  });
+window.declineCall = async()=>{
+ await updateDoc(doc(db,"calls",currentCallId),{status:"ended"});
+ show("usersScreen");
+};
 
-  document.getElementById("callScreen").style.display="block";
-}
-
-// END CALL
-
-window.endCall = async ()=>{
-  if(pc) pc.close();
-  if(currentCallId){
-    await updateDoc(doc(db,"calls",currentCallId),{
-      status:"ended"
-    });
-  }
-  document.getElementById("callScreen").style.display="none";
+window.endCall = async()=>{
+ if(pc) pc.close();
+ if(currentCallId)
+  await updateDoc(doc(db,"calls",currentCallId),{status:"ended"});
+ show("usersScreen");
 };
 
 </script>
-
 </body>
-</html>
+  </html>
