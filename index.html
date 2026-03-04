@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tresor Call</title>
+
+<style>
+body{margin:0;font-family:system-ui;background:#111;color:white}
+.header{background:#075E54;padding:15px;text-align:center;font-weight:bold}
+.screen{display:none}
+.card{padding:20px}
+input{width:100%;padding:12px;margin:8px 0;border-radius:8px;border:none}
+button{padding:12px;border:none;border-radius:25px;font-weight:bold}
+.green{background:#25D366;color:black;width:100%}
+.red{background:#e53935;color:white;width:100%}
+.user{padding:15px;border-bottom:1px solid #222}
+.user:active{background:#222}
+video{width:100%;height:100vh;object-fit:cover}
+.overlay{
+ position:absolute;
+ bottom:40px;
+ width:100%;
+ text-align:center;
+}
+</style>
+</head>
+<body>
+
+<div class="header">Tresor Call</div>
+
+<!-- LOGIN -->
+<div id="loginScreen" class="screen card" style="display:block">
+<h3>Connexion</h3>
+<input id="email" placeholder="Email">
+<input id="password" type="password" placeholder="Password">
+<button class="green" onclick="register()">Créer compte</button>
+<button class="green" onclick="login()">Se connecter</button>
+</div>
+
+<!-- USERS -->
+<div id="usersScreen" class="screen">
+<div id="userList"></div>
+</div>
+
+<!-- OUTGOING -->
+<div id="callingScreen" class="screen" style="text-align:center;padding-top:100px">
+<h2 id="callingText">Calling...</h2>
+<button class="red" onclick="endCall()">Annuler</button>
+</div>
+
+<!-- INCOMING -->
+<div id="incomingScreen" class="screen" style="text-align:center;padding-top:100px">
+<h2>📞 Appel entrant</h2>
+<button class="green" onclick="acceptCall()">Accepter</button>
+<button class="red" onclick="declineCall()">Refuser</button>
+</div>
+
+<!-- VIDEO -->
+<div id="videoScreen" class="screen">
+<video id="remoteVideo" autoplay playsinline></video>
+<video id="localVideo" autoplay muted playsinline style="position:absolute;width:120px;height:160px;bottom:20px;right:20px;border-radius:12px"></video>
+<div class="overlay">
+<button class="red" onclick="endCall()">Raccrocher</button>
+</div>
+</div>
+
+<script type="module">
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged }
+from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import { getFirestore, doc, setDoc, updateDoc, getDoc, collection, addDoc, onSnapshot }
+from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCNtKgSRE_qDKwIkq4VPqPOuRgs2iKXfoQ",
+  authDomain: "tresor-ae58e.firebaseapp.com",
+  projectId: "tresor-ae58e",
+  storageBucket: "tresor-ae58e.firebasestorage.app",
+  messagingSenderId: "835562519447",
+  appId: "1:835562519447:web:841895f8a84fc6dbc522d2"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+let pc;
+let localStream;
+let currentCallId;
+
+const servers = { iceServers:[{urls:["stun:stun.l.google.com:19302"]}] };
+
+function show(screen){
+ document.querySelectorAll(".screen").forEach(s=>s.style.display="none");
+ document.getElementById(screen).style.display="block";
+}
+
+window.register = async ()=>{
+ await createUserWithEmailAndPassword(auth,email.value,password.value);
+};
+
+window.login = async ()=>{
+ await signInWithEmailAndPassword(auth,email.value,password.value);
+};
+
+onAuthStateChanged(auth,user=>{
+ if(user){
+  show("usersScreen");
+  loadUsers();
+  listenIncoming();
+ }
+});
+
+function loadUsers(){
+ onSnapshot(collection(db,"users"),snap=>{
+  userList.innerHTML="";
+  snap.forEach(d=>{
+   if(d.id!==auth.currentUser.uid){
+    userList.innerHTML+=`
+    <div class="user" onclick="startCall('${d.id}')">
+      ${d.data().email}
+    </div>`;
+   }
+  });
+ });
+}
+
+window.startCall = async(receiverId)=>{
+ show("callingScreen");
+ pc = new RTCPeerConnection(servers);
+
+ localStream = await navigator.mediaDevices.getUserMedia({
+  video:{width:320,height:240},
+  audio:true
+ });
+
+ localVideo.srcObject = localStream;
+ localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+
+ pc.ontrack=e=>remoteVideo.srcObject=e.streams[0];
+
+ const callDoc = doc(collection(db,"calls"));
+ currentCallId = callDoc.id;
+
+ pc.onicecandidate=e=>{
+  if(e.candidate) addDoc(collection(callDoc,"offerCandidates"),e.candidate.toJSON());
+ };
+
+ const offer = await pc.createOffer();
+ await pc.setLocalDescription(offer);
+
+ await setDoc(callDoc,{
+  caller:auth.currentUser.uid,
+  receiver:receiverId,
+  offer,
+  status:"ringing"
+ });
+
+ onSnapshot(callDoc,s=>{
+  const data=s.data();
+  if(data?.answer && !pc.currentRemoteDescription){
+   pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+   show("videoScreen");
+  }
+ });
+};
+
+function listenIncoming(){
+ onSnapshot(collection(db,"calls"),snap=>{
+  snap.forEach(d=>{
+   const data=d.data();
+   if(data.receiver===auth.currentUser.uid && data.status==="ringing"){
+    currentCallId=d.id;
+    show("incomingScreen");
+   }
+  });
+ });
+}
+
+window.acceptCall = async()=>{
+ const callDoc=doc(db,"calls",currentCallId);
+ const data=(await getDoc(callDoc)).data();
+
+ pc=new RTCPeerConnection(servers);
+
+ localStream=await navigator.mediaDevices.getUserMedia({
+  video:{width:320,height:240},
+  audio:true
+ });
+
+ localVideo.srcObject=localStream;
+ localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+
+ pc.ontrack=e=>remoteVideo.srcObject=e.streams[0];
+
+ pc.onicecandidate=e=>{
+  if(e.candidate) addDoc(collection(callDoc,"answerCandidates"),e.candidate.toJSON());
+ };
+
+ await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+ const answer=await pc.createAnswer();
+ await pc.setLocalDescription(answer);
+
+ await updateDoc(callDoc,{answer,status:"accepted"});
+
+ show("videoScreen");
+};
+
+window.declineCall = async()=>{
+ await updateDoc(doc(db,"calls",currentCallId),{status:"ended"});
+ show("usersScreen");
+};
+
+window.endCall = async()=>{
+ if(pc) pc.close();
+ if(currentCallId)
+  await updateDoc(doc(db,"calls",currentCallId),{status:"ended"});
+ show("usersScreen");
+};
+
+</script>
+</body>
+</html>
