@@ -8,14 +8,21 @@
 body{margin:0;font-family:system-ui;background:#111;color:white}
 .header{background:#075E54;padding:15px;text-align:center;font-weight:bold}
 .screen{display:none}
-.card{padding:20px}
 input{width:100%;padding:12px;margin:8px 0;border-radius:8px;border:none}
-button{padding:12px;border:none;border-radius:25px;font-weight:bold}
+button{padding:12px;border:none;border-radius:25px;font-weight:bold;margin:5px}
 .green{background:#25D366;color:black;width:100%}
 .red{background:#e53935;color:white;width:100%}
 .user{padding:15px;border-bottom:1px solid #222}
 .user:active{background:#222}
 video{width:100%;height:100vh;object-fit:cover}
+.smallVideo{
+ position:absolute;
+ width:120px;
+ height:160px;
+ bottom:20px;
+ right:20px;
+ border-radius:12px;
+}
 .overlay{
  position:absolute;
  bottom:40px;
@@ -29,8 +36,7 @@ video{width:100%;height:100vh;object-fit:cover}
 <div class="header">Tresor Call</div>
 
 <!-- LOGIN -->
-<div id="loginScreen" class="screen card" style="display:block">
-<h3>Connexion</h3>
+<div id="loginScreen" class="screen" style="display:block;padding:20px">
 <input id="email" placeholder="Email">
 <input id="password" type="password" placeholder="Password">
 <button class="green" onclick="register()">Créer compte</button>
@@ -42,9 +48,9 @@ video{width:100%;height:100vh;object-fit:cover}
 <div id="userList"></div>
 </div>
 
-<!-- OUTGOING -->
+<!-- CALLING -->
 <div id="callingScreen" class="screen" style="text-align:center;padding-top:100px">
-<h2 id="callingText">Calling...</h2>
+<h2>Calling...</h2>
 <button class="red" onclick="endCall()">Annuler</button>
 </div>
 
@@ -58,7 +64,7 @@ video{width:100%;height:100vh;object-fit:cover}
 <!-- VIDEO -->
 <div id="videoScreen" class="screen">
 <video id="remoteVideo" autoplay playsinline></video>
-<video id="localVideo" autoplay muted playsinline style="position:absolute;width:120px;height:160px;bottom:20px;right:20px;border-radius:12px"></video>
+<video id="localVideo" autoplay muted playsinline class="smallVideo"></video>
 <div class="overlay">
 <button class="red" onclick="endCall()">Raccrocher</button>
 </div>
@@ -88,19 +94,22 @@ const db = getFirestore(app);
 let pc;
 let localStream;
 let currentCallId;
+let callDocRef;
 
-const servers = { iceServers:[{urls:["stun:stun.l.google.com:19302"]}] };
+const servers = {
+ iceServers:[{urls:["stun:stun.l.google.com:19302"]}]
+};
 
 function show(screen){
  document.querySelectorAll(".screen").forEach(s=>s.style.display="none");
  document.getElementById(screen).style.display="block";
 }
 
-window.register = async ()=>{
+window.register = async()=>{
  await createUserWithEmailAndPassword(auth,email.value,password.value);
 };
 
-window.login = async ()=>{
+window.login = async()=>{
  await signInWithEmailAndPassword(auth,email.value,password.value);
 };
 
@@ -128,41 +137,59 @@ function loadUsers(){
 
 window.startCall = async(receiverId)=>{
  show("callingScreen");
+
  pc = new RTCPeerConnection(servers);
 
  localStream = await navigator.mediaDevices.getUserMedia({
-  video:{width:320,height:240},
+  video:{width:320,height:240,frameRate:15},
   audio:true
  });
 
- localVideo.srcObject = localStream;
- localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+ document.getElementById("localVideo").srcObject = localStream;
 
- pc.ontrack=e=>remoteVideo.srcObject=e.streams[0];
+ localStream.getTracks().forEach(track=>{
+  pc.addTrack(track,localStream);
+ });
 
- const callDoc = doc(collection(db,"calls"));
- currentCallId = callDoc.id;
+ pc.ontrack = event=>{
+  document.getElementById("remoteVideo").srcObject = event.streams[0];
+ };
 
- pc.onicecandidate=e=>{
-  if(e.candidate) addDoc(collection(callDoc,"offerCandidates"),e.candidate.toJSON());
+ callDocRef = doc(collection(db,"calls"));
+ currentCallId = callDocRef.id;
+
+ pc.onicecandidate = event=>{
+  if(event.candidate){
+   addDoc(collection(callDocRef,"offerCandidates"),event.candidate.toJSON());
+  }
  };
 
  const offer = await pc.createOffer();
  await pc.setLocalDescription(offer);
 
- await setDoc(callDoc,{
+ await setDoc(callDocRef,{
   caller:auth.currentUser.uid,
   receiver:receiverId,
   offer,
   status:"ringing"
  });
 
- onSnapshot(callDoc,s=>{
-  const data=s.data();
+ // LISTEN ANSWER
+ onSnapshot(callDocRef,snap=>{
+  const data=snap.data();
   if(data?.answer && !pc.currentRemoteDescription){
    pc.setRemoteDescription(new RTCSessionDescription(data.answer));
    show("videoScreen");
   }
+ });
+
+ // LISTEN ANSWER ICE
+ onSnapshot(collection(callDocRef,"answerCandidates"),snap=>{
+  snap.docChanges().forEach(change=>{
+   if(change.type==="added"){
+    pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+   }
+  });
  });
 };
 
@@ -172,6 +199,7 @@ function listenIncoming(){
    const data=d.data();
    if(data.receiver===auth.currentUser.uid && data.status==="ringing"){
     currentCallId=d.id;
+    callDocRef=doc(db,"calls",d.id);
     show("incomingScreen");
    }
   });
@@ -179,46 +207,65 @@ function listenIncoming(){
 }
 
 window.acceptCall = async()=>{
- const callDoc=doc(db,"calls",currentCallId);
- const data=(await getDoc(callDoc)).data();
+ const callData=(await getDoc(callDocRef)).data();
 
- pc=new RTCPeerConnection(servers);
+ pc = new RTCPeerConnection(servers);
 
- localStream=await navigator.mediaDevices.getUserMedia({
-  video:{width:320,height:240},
+ localStream = await navigator.mediaDevices.getUserMedia({
+  video:{width:320,height:240,frameRate:15},
   audio:true
  });
 
- localVideo.srcObject=localStream;
- localStream.getTracks().forEach(t=>pc.addTrack(t,localStream));
+ document.getElementById("localVideo").srcObject = localStream;
 
- pc.ontrack=e=>remoteVideo.srcObject=e.streams[0];
+ localStream.getTracks().forEach(track=>{
+  pc.addTrack(track,localStream);
+ });
 
- pc.onicecandidate=e=>{
-  if(e.candidate) addDoc(collection(callDoc,"answerCandidates"),e.candidate.toJSON());
+ pc.ontrack = event=>{
+  document.getElementById("remoteVideo").srcObject = event.streams[0];
  };
 
- await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
- const answer=await pc.createAnswer();
+ pc.onicecandidate = event=>{
+  if(event.candidate){
+   addDoc(collection(callDocRef,"answerCandidates"),event.candidate.toJSON());
+  }
+ };
+
+ await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
+
+ const answer = await pc.createAnswer();
  await pc.setLocalDescription(answer);
 
- await updateDoc(callDoc,{answer,status:"accepted"});
+ await updateDoc(callDocRef,{
+  answer,
+  status:"accepted"
+ });
+
+ // LISTEN OFFER ICE
+ onSnapshot(collection(callDocRef,"offerCandidates"),snap=>{
+  snap.docChanges().forEach(change=>{
+   if(change.type==="added"){
+    pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+   }
+  });
+ });
 
  show("videoScreen");
 };
 
 window.declineCall = async()=>{
- await updateDoc(doc(db,"calls",currentCallId),{status:"ended"});
+ await updateDoc(callDocRef,{status:"ended"});
  show("usersScreen");
 };
 
 window.endCall = async()=>{
  if(pc) pc.close();
  if(currentCallId)
-  await updateDoc(doc(db,"calls",currentCallId),{status:"ended"});
+  await updateDoc(callDocRef,{status:"ended"});
  show("usersScreen");
 };
 
 </script>
 </body>
-</html>
+ </html>
